@@ -191,14 +191,6 @@ class Qwen2ModelWeek1:
         self.rope_traditional = mlx_model.args.rope_traditional
         self.precision = mx.float16
 
-        print(f"hidden_size: {self.hidden_size}")
-        print(f"num_hidden_layers: {self.num_hidden_layers}")
-        print(f"intermediate_size: {self.intermediate_size}")
-        print(f"num_attention_heads: {self.num_attention_heads}")
-        print(f"max_position_embeddings: {self.max_position_embeddings}")
-        print(f"rms_norm_eps: {self.rms_norm_eps}")
-        print(f"vocab_size: {self.vocab_size}")
-
         self.embedding = Embedding(
             vocab_size=self.vocab_size,
             embedding_dim=self.hidden_size,
