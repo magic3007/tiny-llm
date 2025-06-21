@@ -1,6 +1,5 @@
 import mlx.core as mx
 from .basics import softmax, linear
-import math
 
 
 def scaled_dot_product_attention_simple(
