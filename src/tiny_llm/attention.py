@@ -63,7 +63,9 @@ class SimpleMultiHeadAttention:
         return linear(output, self.wo) # (N.., L, hidden_size)
 
 def causal_mask(L: int, S: int, dtype: mx.Dtype) -> mx.array:
-    pass
+    mask = mx.tril(mx.ones((L, S)), k=(S - L))
+    mask = mx.where(mask, mx.array(0), mx.array(-mx.inf)).astype(dtype)
+    return mask
 
 
 def scaled_dot_product_attention_grouped(
@@ -73,7 +75,43 @@ def scaled_dot_product_attention_grouped(
     scale: float | None = None,
     mask: mx.array | str | None = None,
 ) -> mx.array:
-    pass
+    # N.. is zero or more dimensions for batches
+    # H_q is the number of query heads
+    # H is the number of key/value heads (H_q must be divisible by H)
+    # L is the query sequence length
+    # S is the key/value sequence length
+    # D is the head dimension
+
+    # query: (N.., H_q, L, D)
+    # key: (N.., H, S, D)
+    # value: (N.., H, S, D)
+    # mask: (N.., H_q, L, S)
+    # output: (N.., H_q, L, D)
+
+    H_q, L, D = query.shape[-3:]
+    H, S, _ = key.shape[-3:]
+    expected_shape = query.shape
+
+    assert H_q % H == 0, "H_q must be divisible by H"
+
+    n_repeats = H_q // H
+
+    query = query.reshape(-1, H, n_repeats, L, D)
+    key = key.reshape(-1, H, 1, S, D)
+    value = value.reshape(-1, H, 1, S, D)
+
+    factor = mx.rsqrt(D) if scale is None else scale
+    scores = query @ key.swapaxes(-2, -1) * factor # (N.., H, n_repeats, L, S)
+    if mask is not None:
+        if mask == "causal":
+            mask = causal_mask(L, S, scores.dtype) # (L, S)
+            scores = scores + mask
+        else:
+            assert isinstance(mask, mx.array), "mask must be a tensor"
+            mask = mask.reshape(-1, H, n_repeats, mask.shape[-2], mask.shape[-1])
+            scores = scores + mask
+    result = softmax(scores, axis=-1) @ value # (N.., H, n_repeats, L, D)
+    return result.reshape(expected_shape) # (N.., H_q, L, D)
 
 
 def flash_attention(
