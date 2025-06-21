@@ -95,10 +95,27 @@ class Qwen2MLP:
         w_up: mx.array,
         w_down: mx.array,
     ):
-        pass
+        self.dim = dim
+        self.hidden_dim = hidden_dim
+        self.w_gate = w_gate
+        self.w_up = w_up
+        self.w_down = w_down
 
     def __call__(self, x: mx.array) -> mx.array:
-        pass
+        # N.. is zero or more dimensions for batches
+        # E is hidden_size (embedding dimension of the model)
+        # I is intermediate_size (dimension of the hidden layer in MLP)
+        # L is the sequence length
+
+        # input: N.. x L x E
+        # w_gate: I x E
+        # w_up: I x E
+        # w_down: E x I
+        # output: N.. x L x E
+
+        gate = linear(x, self.w_gate) # (N.., L, I)
+        up = linear(x, self.w_up) # (N.., L, I)
+        return linear(silu(gate) * up, self.w_down) # (N.., L, E)
 
 
 class Qwen2TransformerBlock:
