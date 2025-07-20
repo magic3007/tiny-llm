@@ -3,13 +3,13 @@
 #include <mlx/array.h>
 #include <mlx/primitives.h>
 
-#include <Metal/MTLTypes.hpp>
-
 #include "mlx/backend/common/utils.h"  // provide function `elem_to_loc`
 #include "mlx/backend/cpu/encoder.h"
 #include "mlx/utils.h"
 
 #ifdef _METAL_
+#include <Metal/MTLTypes.hpp>
+
 #include "mlx/backend/metal/device.h"
 #include "mlx/backend/metal/utils.h"
 #endif
