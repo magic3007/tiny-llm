@@ -59,6 +59,7 @@ if(MLX_BUILD_METAL)
     tiny_llm_ext
     SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/axpby.metal
+    ${CMAKE_CURRENT_LIST_DIR}/src/quantized_matmul.metal
     INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}
     ${MLX_INCLUDE_DIRS}

@@ -3,6 +3,8 @@
 #include <mlx/array.h>
 #include <mlx/primitives.h>
 
+#include <Metal/MTLTypes.hpp>
+
 #include "mlx/backend/common/utils.h"  // provide function `elem_to_loc`
 #include "mlx/backend/cpu/encoder.h"
 #include "mlx/utils.h"
@@ -193,6 +195,53 @@ void QuantizedMatmul::eval_gpu(const std::vector<mx::array> &inputs, std::vector
     auto &a = inputs[2];
     auto &b = inputs[3];
     auto &out = outputs[0];
+
+    if (!a.flags().row_contiguous) {
+        throw std::runtime_error("quantized_matmul: a must be contiguous");
+    }
+    if (!b.flags().row_contiguous) {
+        throw std::runtime_error("quantized_matmul: b must be contiguous");
+    }
+
+    int M = a.shape()[0];
+    int N = a.shape()[1];
+    int K = b.shape()[0];
+
+    out.set_data(mx::allocator::malloc(out.nbytes()));
+
+    auto &s = stream();
+    auto &d = mx::metal::device(s.device);
+
+    // Make a kernel from this metal library
+    auto kernel = d.get_kernel("quantized_matmul_w4a16_g64", "tiny_llm_ext");
+
+    auto &encoder = d.get_command_encoder(s.index);
+
+    encoder.set_compute_pipeline_state(kernel);
+
+    // Encode input arrays to kernel
+    encoder.set_input_array(scales, 0);
+    encoder.set_input_array(biases, 1);
+    encoder.set_input_array(a, 2);
+    encoder.set_input_array(b, 3);
+    // Encode output arrays to kernel
+    encoder.set_output_array(out, 4);
+    // Encode matrix parameters
+    encoder.set_bytes(M, 5);
+    encoder.set_bytes(N, 6);
+    encoder.set_bytes(K, 7);
+
+    size_t tgp_size = kernel->maxTotalThreadsPerThreadgroup();
+    const int x_size = 32;
+    const int y_size = tgp_size / x_size;
+    if (tgp_size < x_size * y_size) {
+        throw std::runtime_error("quantized_matmul: tgp_size must be larger than x*y");
+    }
+
+    MTL::Size num_threadgroups = MTL::Size((M + x_size - 1) / x_size, (K + y_size - 1) / y_size, 1);
+    MTL::Size num_threads_per_group = MTL::Size(x_size, y_size, 1);
+
+    encoder.dispatch_threadgroups(num_threadgroups, num_threads_per_group);
 }
 
 }  // namespace tiny_llm_ext
