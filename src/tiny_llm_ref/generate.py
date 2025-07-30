@@ -213,23 +213,14 @@ def batch_generate(
             for i in range(batch_size):
                 if not is_idle[i]:
                     detokenizers[i].add_token(next_tokens[i].item())
-                    if (
-                        next_tokens[i].item() == tokenizer.eos_token_id
-                        or offsets[i] >= max_seq_len
-                    ):
-                        print(
-                            f"(Finished) {prompt_idx[i]}: " + detokenizers[i].text,
-                            flush=True,
-                        )
+                    remove_due_to_eos = next_tokens[i].item() == tokenizer.eos_token_id
+                    remove_due_to_max_seq_len = offsets[i] >= max_seq_len
+                    if remove_due_to_eos or remove_due_to_max_seq_len:
+                        reason = "EOS" if remove_due_to_eos else "Max Seq Len"
                         result.append((prompt_idx[i], detokenizers[i].text))
-                        print(f"Removing request {i}", flush=True)
+                        print(f"Removing request {i} due to {reason}", flush=True)
                         batch_cache.remove_request(i)
                         is_idle[i] = True
                         continue
-                    else:
-                        print(
-                            f"(In Progress) {prompt_idx[i]}: " + detokenizers[i].text,
-                            flush=True,
-                        )
         _print_progress(detokenizers, prompt_idx, is_idle, pending_prefill_requests)
     return result

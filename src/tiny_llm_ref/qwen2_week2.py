@@ -62,6 +62,7 @@ class Qwen2MultiHeadAttention:
         projection_v = quantized_linear(x, self.wv, bias=self.bv).reshape(
             B, L, self.num_kv_heads, self.head_dim
         )
+        # todo: move offsets to kv cache
         if isinstance(offsets, int):
             offset_slice = [slice(int(offsets), int(offsets + L))]
         else:
@@ -71,9 +72,11 @@ class Qwen2MultiHeadAttention:
         projection_q = projection_q.transpose(0, 2, 1, 3)
         projection_k = projection_k.transpose(0, 2, 1, 3)
         projection_v = projection_v.transpose(0, 2, 1, 3)
-        projection_k, projection_v, _ = cache.update_and_fetch(
-            projection_k, projection_v
+        projection_k, projection_v, _, kv_cache_mask = cache.update_and_fetch(
+            projection_k, projection_v, q_L=L
         )
+        if kv_cache_mask is not None:
+            mask = kv_cache_mask
         x = scaled_dot_product_attention_grouped(
             projection_q.astype(mx.float32),
             projection_k.astype(mx.float32),
@@ -252,9 +255,7 @@ class Qwen2ModelWeek2:
     ) -> mx.array:
         h = self.embedding(inputs)
         for layer in range(self.num_hidden_layers):
-            h = self.layers_inner[layer](
-                h, offset, cache[layer], mask="causal" if h.shape[1] > 1 else None
-            )
+            h = self.layers_inner[layer](h, offset, cache[layer], mask="causal")
         h = self.norm(h)
         if self.w_lm_head is not None:
             return quantized_linear(h, self.w_lm_head)

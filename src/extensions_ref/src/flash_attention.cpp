@@ -215,7 +215,8 @@ void FlashAttention::eval_gpu(const std::vector<mx::array> &inputs, std::vector<
     out.set_data(mx::allocator::malloc(out.nbytes()));
 
     // Make a kernel from this metal library
-    auto kernel = d.get_kernel("flash_attention_f32_e128", "tiny_llm_ext_ref");
+    auto library = d.get_library("tiny_llm_ext_ref");
+    auto kernel = d.get_kernel("flash_attention_f32_e128", library);
 
     // Prepare to encode kernel
     auto &compute_encoder = d.get_command_encoder(s.index);

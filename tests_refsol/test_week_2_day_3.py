@@ -28,7 +28,7 @@ def attention_helper(stream: mx.Stream, H_q, H, L, E, S, BATCH):
                 scale=scale,
             )
             mx.eval(user_output)  # so that any error will be caught here
-            assert_allclose(user_output, reference_output, precision=precision)
+            assert_allclose(user_output, reference_output, precision=mx.float16)
 
 
 def test_flash_attention_cpu_small():

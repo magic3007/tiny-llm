@@ -32,7 +32,7 @@ public:
         throw std::runtime_error("QuantizedMatmul has no vmap implementation.");
     }
 
-    void print(std::ostream &os) override { os << "QuantizedMatmul"; }
+    const char* name() const override { return "QuantizedMatmul"; }
 
     bool is_equivalent(const mx::Primitive &other) const override;
 
@@ -57,7 +57,7 @@ public:
         throw std::runtime_error("FlashAttention has no vmap implementation.");
     }
 
-    void print(std::ostream &os) override { os << "FlashAttention"; }
+    const char* name() const override { return "FlashAttention"; }
 
     bool is_equivalent(const mx::Primitive &other) const override {
         const FlashAttention &r_other = static_cast<const FlashAttention &>(other);

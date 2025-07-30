@@ -40,12 +40,13 @@ def scaled_dot_product_attention_grouped(
 
     H_q, L, D = query.shape[-3:]
     H, S, _ = key.shape[-3:]
+    B = query.shape[:-3]
     assert H_q % H == 0
     n_repeats = H_q // H
 
-    query = query.reshape(-1, H, n_repeats, L, D)
-    key = key.reshape(-1, H, 1, S, D)
-    value = value.reshape(-1, H, 1, S, D)
+    query = query.reshape(*B, -1, H, n_repeats, L, D)
+    key = key.reshape(*B, -1, H, 1, S, D)
+    value = value.reshape(*B, -1, H, 1, S, D)
 
     scores = mx.matmul(query, key.swapaxes(-2, -1)) * factor
     if mask is not None:
@@ -53,7 +54,8 @@ def scaled_dot_product_attention_grouped(
             mask = causal_mask(L, S, scores.dtype)
             scores = scores + mask
         else:
-            mask = mask.reshape(-1, H, n_repeats, mask.shape[-2], mask.shape[-1])
+            mask = mx.broadcast_to(mask, (*B, H_q, L, S))
+            mask = mask.reshape(*B, 1, H, n_repeats, L, S)
             scores = scores + mask
     result = mx.matmul(softmax(scores, axis=-1), value)
     return result.reshape(expected_shape)

@@ -1,12 +1,13 @@
 from typing import Optional
 
+from .attention import causal_mask
 import mlx.core as mx
 
 
 class TinyKvCache:
     def update_and_fetch(
-        self, key: mx.array, value: mx.array
-    ) -> tuple[mx.array, mx.array, int]:
+        self, key: mx.array, value: mx.array, q_L: int | None = None
+    ) -> tuple[mx.array, mx.array, int, Optional[mx.array]]:
         pass
 
 
@@ -14,40 +15,49 @@ class BatchingKvCache(TinyKvCache):
     def __init__(self, max_active_requests: int, max_seq_len: int):
         self.max_active_requests = max_active_requests
         self.max_seq_len = max_seq_len
-        self.key_values = None
-        self.head_offsets = mx.array([0] * max_active_requests)
-        self.head = 0
+        self.key_values = [None] * max_active_requests
+        self.real_seq_len = [0] * max_active_requests
+        self.HD = None
 
     def update_and_fetch(
-        self, key: mx.array, value: mx.array
-    ) -> tuple[mx.array, mx.array, int]:
-        B, H, L, D = key.shape
+        self, key: mx.array, value: mx.array, q_L: int | None = None
+    ) -> tuple[mx.array, mx.array, int, Optional[mx.array]]:
+        B, H, S, D = key.shape
         assert key.shape == value.shape
-        assert L <= self.max_seq_len
-        keys, values = self.key_values
-        if self.head + L <= self.max_seq_len:
-            keys[:, :, self.head : self.head + L, :] = key
-            values[:, :, self.head : self.head + L, :] = value
-            self.head += L
-            self.head_offsets += L
-        else:
-            fill_size = self.max_seq_len - self.head
-            keys[:, :, self.head : self.max_seq_len, :] = key[:, :, :fill_size, :]
-            values[:, :, self.head : self.max_seq_len, :] = value[:, :, :fill_size, :]
-            remaining_size = L - fill_size
-            keys[:, :, :remaining_size, :] = key[:, :, fill_size:, :]
-            values[:, :, :remaining_size, :] = value[:, :, fill_size:, :]
-            self.head = remaining_size
-            self.head_offsets += L
-        self.key_values = (keys, values)
-
-        before_keys = keys[:, :, self.head :, :]
-        before_values = values[:, :, self.head :, :]
-        after_keys = keys[:, :, : self.head, :]
-        after_values = values[:, :, : self.head, :]
-        keys = mx.concat([after_keys, before_keys], axis=2)
-        values = mx.concat([after_values, before_values], axis=2)
-        return keys, values, self.head_offsets
+        assert S <= self.max_seq_len
+        assert self.HD == (H, D), f"expect {self.HD} but got {H, D}"
+        assert B == self.max_active_requests
+        # Step 1: append the result to the cache
+        for b in range(B):
+            if self.key_values[b] is None:
+                continue
+            cached_keys, cached_values = self.key_values[b]
+            keys, values = key[b], value[b]
+            keys = mx.concat([cached_keys, keys], axis=1)
+            values = mx.concat([cached_values, values], axis=1)
+            self.key_values[b] = (keys, values)
+            self.real_seq_len[b] += S
+        # Step 2: compute seq_len of this batch
+        seq_len = max(self.real_seq_len)
+        # Step 3: generate masks and a single array of keys and values
+        masks = []
+        keys = mx.zeros((self.max_active_requests, H, seq_len, D), dtype=key.dtype)
+        values = mx.zeros((self.max_active_requests, H, seq_len, D), dtype=value.dtype)
+        masks = mx.full(
+            (self.max_active_requests, q_L, seq_len), -mx.inf, dtype=key.dtype
+        )
+        for b in range(B):
+            if self.key_values[b] is None:
+                # for some reasons we need to do this, otherwise it will cause wrong output?
+                # maybe precision issues?
+                masks[b, :, :] = causal_mask(q_L, seq_len, dtype=key.dtype)
+                continue
+            cached_keys, cached_values = self.key_values[b]
+            S = self.real_seq_len[b]
+            keys[b, :, seq_len - S : seq_len, :] = cached_keys
+            values[b, :, seq_len - S : seq_len, :] = cached_values
+            masks[b, :, seq_len - S : seq_len] = causal_mask(q_L, S, dtype=key.dtype)
+        return keys, values, None, masks.reshape(B, 1, q_L, seq_len)
 
     def add_request(self, prefilled: TinyKvCache, id: int):
         if id >= self.max_active_requests:
@@ -55,50 +65,18 @@ class BatchingKvCache(TinyKvCache):
         keys, values = prefilled.key_values
         B, H, L, D = keys.shape
         assert B == 1
-        if self.key_values is None:
-            self.key_values = (
-                mx.zeros((self.max_active_requests, H, self.max_seq_len, D)),
-                mx.zeros((self.max_active_requests, H, self.max_seq_len, D)),
-            )
-        if L > self.max_seq_len:
-            keys = keys[:, :, -self.max_seq_len :, :]
-            values = values[:, :, -self.max_seq_len :, :]
-            take_size = self.max_seq_len
+        if self.HD is None:
+            self.HD = (H, D)
         else:
-            take_size = L
-        cached_keys, cached_values = self.key_values
-        # Firstly, fill the cache with zeros
-        cached_keys[id, :, :, :] = 0
-        cached_values[id, :, :, :] = 0
-        # Then, fill the cache with the prefilled values up to self.head (may wrap)
-        start_pos = (self.head - take_size + self.max_seq_len) % self.max_seq_len
-        if start_pos + take_size <= self.max_seq_len:
-            cached_keys[id, :, start_pos : start_pos + take_size, :] = keys[0, :, :, :]
-            cached_values[id, :, start_pos : start_pos + take_size, :] = values[
-                0, :, :, :
-            ]
-        else:
-            cached_keys[id, :, start_pos : self.max_seq_len, :] = keys[
-                0, :, : self.max_seq_len - start_pos, :
-            ]
-            cached_values[id, :, start_pos : self.max_seq_len, :] = values[
-                0, :, : self.max_seq_len - start_pos, :
-            ]
-            cached_keys[id, :, : take_size - (self.max_seq_len - start_pos), :] = keys[
-                0, :, self.max_seq_len - start_pos :, :
-            ]
-            cached_values[id, :, : take_size - (self.max_seq_len - start_pos), :] = (
-                values[0, :, self.max_seq_len - start_pos :, :]
-            )
-        self.head_offsets[id] = L
-        self.key_values = (cached_keys, cached_values)
+            assert self.HD == (H, D)
+        self.real_seq_len[id] = L
+        self.key_values[id] = (keys[0], values[0])
 
     def remove_request(self, id: int):
         if self.key_values is None:
             raise ValueError(f"Request id {id} is not in the cache")
-        cached_keys, cached_values = self.key_values
-        cached_keys[id, :, :, :] = 0
-        cached_values[id, :, :, :] = 0
+        self.key_values[id] = None
+        self.real_seq_len[id] = 0
 
 
 class TinyKvFullCache(TinyKvCache):
@@ -107,14 +85,14 @@ class TinyKvFullCache(TinyKvCache):
         self.offset = 0
 
     def update_and_fetch(
-        self, key: mx.array, value: mx.array
-    ) -> tuple[mx.array, mx.array, int]:
+        self, key: mx.array, value: mx.array, q_L: int | None = None
+    ) -> tuple[mx.array, mx.array, int, Optional[mx.array]]:
         if self.key_values is None:
             assert self.offset == 0
             self.key_values = (key, value)
             B, H, S, D = key.shape
             self.offset = S
-            return key, value, 0
+            return key, value, 0, None
         else:
             B, H, S, D = key.shape
             assert key.shape == value.shape
@@ -126,63 +104,4 @@ class TinyKvFullCache(TinyKvCache):
             self.key_values = (new_keys, new_values)
             start_offset = self.offset
             self.offset += S
-            return new_keys, new_values, start_offset
-
-
-class TinyKvRotatingCache(TinyKvCache):
-    def __init__(self, max_seq_len: int):
-        self.max_seq_len = max_seq_len
-        self.key_values = None
-        self.head = 0
-        self.head_offset = 0
-
-    def update_and_fetch(
-        self, key: mx.array, value: mx.array, offset: int
-    ) -> tuple[mx.array, mx.array]:
-        if self.key_values is None:
-            assert offset == 0
-            B, H, L, D = key.shape
-            assert L <= self.max_seq_len
-            keys = mx.zeros((B, H, self.max_seq_len, D))
-            values = mx.zeros((B, H, self.max_seq_len, D))
-            keys[:, :, :L, :] = key
-            values[:, :, :L, :] = value
-            self.key_values = (keys, values)
-            self.head = L
-            self.head_offset = L
-            return keys[:, :, :L, :], values[:, :, :L, :]
-        else:
-            B, H, L, D = key.shape
-            assert key.shape == value.shape
-            assert offset == self.head_offset
-            assert L <= self.max_seq_len
-            keys, values = self.key_values
-            if self.head + L <= self.max_seq_len:
-                keys[:, :, self.head : self.head + L, :] = key
-                values[:, :, self.head : self.head + L, :] = value
-                self.head += L
-                self.head_offset += L
-            else:
-                fill_size = self.max_seq_len - self.head
-                keys[:, :, self.head : self.max_seq_len, :] = key[:, :, :fill_size, :]
-                values[:, :, self.head : self.max_seq_len, :] = value[
-                    :, :, :fill_size, :
-                ]
-                remaining_size = L - fill_size
-                keys[:, :, :remaining_size, :] = key[:, :, fill_size:, :]
-                values[:, :, :remaining_size, :] = value[:, :, fill_size:, :]
-                self.head = remaining_size
-                self.head_offset += L
-            self.key_values = (keys, values)
-            if self.head_offset < self.max_seq_len:
-                return keys[:, :, : self.head_offset, :], values[
-                    :, :, : self.head_offset, :
-                ]
-            else:
-                before_keys = keys[:, :, self.head_offset :, :]
-                before_values = values[:, :, self.head_offset :, :]
-                after_keys = keys[:, :, : self.head_offset, :]
-                after_values = values[:, :, : self.head_offset, :]
-                keys = mx.concat([after_keys, before_keys], axis=2)
-                values = mx.concat([after_values, before_values], axis=2)
-                return keys, values
+            return new_keys, new_values, start_offset, None
