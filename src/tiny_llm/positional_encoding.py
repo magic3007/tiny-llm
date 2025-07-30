@@ -47,7 +47,17 @@ class RoPE:
         if offset is None:
             cos_basis = self.cos_freqs[:S]
             sin_basis = self.sin_freqs[:S]
-        else:
+        elif isinstance(offset, slice):
+            assert offset.stop - offset.start == S, f"offset must be of length {S}"
+            cos_basis = self.cos_freqs[offset, :]
+            sin_basis = self.sin_freqs[offset, :]
+        elif isinstance(offset, list):
+            assert len(offset) == N, (
+                f"offsets must have the same length as batch size {N}"
+            )
+            for o in offset:
+                assert o.stop - o.start == S, f"offset must be of length {S}"
+            offset = mx.array([list(range(i.start, i.stop)) for i in offset])
             cos_basis = self.cos_freqs[offset, :]
             sin_basis = self.sin_freqs[offset, :]
 
