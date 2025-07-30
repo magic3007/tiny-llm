@@ -39,7 +39,8 @@ public:
     void eval_cpu(const std::vector<mx::array> &inputs, std::vector<mx::array> &outputs) override;
     void eval_gpu(const std::vector<mx::array> &inputs, std::vector<mx::array> &outputs) override;
 
-    void print(std::ostream &os) override { os << "QuantizedMatmul"; }
+
+    const char *name() const override {return "QuantizedMatmul"; }
 
 private:
     int group_size_;

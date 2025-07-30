@@ -213,7 +213,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<mx::array> &inputs, std::vector
     auto &d = mx::metal::device(s.device);
 
     // Make a kernel from this metal library
-    auto kernel = d.get_kernel("quantized_matmul_w4a16_g64", "tiny_llm_ext");
+    auto library = d.get_library("tiny_llm_ext");
+    auto kernel = d.get_kernel("quantized_matmul_w4a16_g64", library);
 
     auto &encoder = d.get_command_encoder(s.index);
 
