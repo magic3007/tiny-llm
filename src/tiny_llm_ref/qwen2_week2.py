@@ -49,7 +49,7 @@ class Qwen2MultiHeadAttention:
         self,
         x: mx.array,
         offsets: list[int],
-        cache: TinyKvCache,
+        cache: TinyKvCache | None,
         mask: mx.array | str | None = None,
     ) -> mx.array:
         B, L, _ = x.shape
@@ -72,11 +72,12 @@ class Qwen2MultiHeadAttention:
         projection_q = projection_q.transpose(0, 2, 1, 3)
         projection_k = projection_k.transpose(0, 2, 1, 3)
         projection_v = projection_v.transpose(0, 2, 1, 3)
-        projection_k, projection_v, _, kv_cache_mask = cache.update_and_fetch(
-            projection_k, projection_v, q_L=L
-        )
-        if kv_cache_mask is not None:
-            mask = kv_cache_mask
+        if cache is not None:
+            projection_k, projection_v, _, kv_cache_mask = cache.update_and_fetch(
+                projection_k, projection_v, q_L=L
+            )
+            if kv_cache_mask is not None:
+                mask = kv_cache_mask
         x = scaled_dot_product_attention_grouped(
             projection_q.astype(mx.float32),
             projection_k.astype(mx.float32),
@@ -251,9 +252,11 @@ class Qwen2ModelWeek2:
         self,
         inputs: mx.array,
         offset: int,
-        cache: list[TinyKvCache],
+        cache: list[TinyKvCache] | None = None,
     ) -> mx.array:
         h = self.embedding(inputs)
+        if cache is None:
+            cache = [None] * self.num_hidden_layers
         for layer in range(self.num_hidden_layers):
             h = self.layers_inner[layer](h, offset, cache[layer], mask="causal")
         h = self.norm(h)
