@@ -47,7 +47,7 @@ class Qwen2MultiHeadAttention:
         self,
         x: mx.array,
         offsets: list[int] | int,
-        cache: TinyKvCache | None = None,
+        cache: TinyKvCache,
         mask: mx.array | str | None = None,
     ) -> mx.array:
         # B: batch_size
@@ -76,6 +76,13 @@ class Qwen2MultiHeadAttention:
         q_proj = q_proj.transpose(0, 2, 1, 3)
         k_proj = k_proj.transpose(0, 2, 1, 3)
         v_proj = v_proj.transpose(0, 2, 1, 3)
+
+        k_proj, v_proj, _, kv_cache_mask = cache.update_and_fetch(
+            k_proj, v_proj, q_L=L
+        )
+        if kv_cache_mask is not None:
+            mask = kv_cache_mask
+
         x = scaled_dot_product_attention_grouped(
             q_proj.astype(mx.float32), 
             k_proj.astype(mx.float32), 
@@ -170,7 +177,7 @@ class Qwen2TransformerBlock:
         self,
         x: mx.array,
         offset: int,
-        cache: TinyKvCache | None = None,
+        cache: TinyKvCache,
         mask: mx.array | str | None = None,
     ) -> mx.array:
         r = self.qwen2_multi_head_attention(self.input_layernorm(x), offset, cache=cache, mask=mask) # (B, L, E)
@@ -255,12 +262,12 @@ class Qwen2ModelWeek2:
         self,
         inputs: mx.array,
         offset: int,
-        cache: list[TinyKvCache] | None = None
+        cache: list[TinyKvCache]
     ) -> mx.array:
         x = self.embedding(inputs)
         mask = "causal" if x.shape[1] > 1 else None
         for i, layer in enumerate(self.layers_inner):
-            x = layer(x, offset, mask=mask)
+            x = layer(x, offset, cache[i], mask=mask)
         x = self.norm(x)
         if self.w_lm_head is not None:
             return quantized_linear(x, self.w_lm_head)
